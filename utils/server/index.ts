@@ -57,8 +57,9 @@ export const OpenAIStream = async (
         },
         ...messages,
       ],
-      max_tokens: 1000,
+      max_tokens: process.env.MAX_TOKENS ? Number.parseInt(process.env.MAX_TOKENS) : 1000,
       temperature: temperature,
+      frequency_penalty: process.env.FREQUENCY_PENALTY ? Number.parseFloat(process.env.FREQUENCY_PENALTY) : 0,
       stream: true,
     }),
   });

@@ -2,12 +2,9 @@ import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TEMPERATURE } from '@/utils/app/const';
 import { OpenAIError, OpenAIStream } from '@/utils/server';
 
 import { ChatBody, Message } from '@/types/chat';
+import { OpenAIModel } from '@/types/openai';
 
-// @ts-expect-error
-import wasm from '../../node_modules/@dqbd/tiktoken/lite/tiktoken_bg.wasm?module';
-
-import tiktokenModel from '@dqbd/tiktoken/encoders/cl100k_base.json';
-import { Tiktoken, init } from '@dqbd/tiktoken/lite/init';
+import GPT3Tokenizer from 'gpt3-tokenizer';
 
 export const config = {
   runtime: 'edge',
@@ -17,12 +14,7 @@ const handler = async (req: Request): Promise<Response> => {
   try {
     const { model, messages, key, prompt, temperature } = (await req.json()) as ChatBody;
 
-    await init((imports) => WebAssembly.instantiate(wasm, imports));
-    const encoding = new Tiktoken(
-      tiktokenModel.bpe_ranks,
-      tiktokenModel.special_tokens,
-      tiktokenModel.pat_str,
-    );
+    const encoding = new GPT3Tokenizer({ type: 'gpt3' });
 
     let promptToSend = prompt;
     if (!promptToSend) {
@@ -34,23 +26,16 @@ const handler = async (req: Request): Promise<Response> => {
       temperatureToUse = DEFAULT_TEMPERATURE;
     }
 
-    const prompt_tokens = encoding.encode(promptToSend);
+    const MAX_TOKENS = process.env.MAX_TOKENS ? Number.parseInt(process.env.MAX_TOKENS) : 1000
+
+    const prompt_tokens = encoding.encode(promptToSend).bpe;
 
     let tokenCount = prompt_tokens.length;
+    let messagesToGoEvaluate: Message[] = [...messages];
     let messagesToSend: Message[] = [];
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      const tokens = encoding.encode(message.content);
-
-      if (tokenCount + tokens.length + 1000 > model.tokenLimit) {
-        break;
-      }
-      tokenCount += tokens.length;
-      messagesToSend = [message, ...messagesToSend];
-    }
-
-    encoding.free();
+    // Always include first prompt
+    messagesToSend = includeFirstMessage(model, messagesToGoEvaluate, tokenCount, encoding, MAX_TOKENS);
 
     const stream = await OpenAIStream(model, promptToSend, temperatureToUse, key, messagesToSend);
 
@@ -64,5 +49,32 @@ const handler = async (req: Request): Promise<Response> => {
     }
   }
 };
+
+const includeFirstMessage = (model: OpenAIModel, messagesToGoEvaluate: Message[], tokenCount: number, encoding: GPT3Tokenizer, maxGenerationTokens: number): Message[] => {
+    let messagesToSend: Message[] = [];
+  
+    if (messagesToGoEvaluate.length > 0) {
+      const firstMessage = messagesToGoEvaluate[0];
+      const firstTokens = encoding.encode(firstMessage.content).bpe;
+      
+      if (tokenCount + firstTokens.length + maxGenerationTokens <= model.tokenLimit) {
+        tokenCount += firstTokens.length;
+  
+        for (let i = messagesToGoEvaluate.length - 1; i >= 1; i--) {
+          const message = messagesToGoEvaluate[i];
+          const tokens = encoding.encode(message.content).bpe;
+    
+          if (tokenCount + tokens.length + maxGenerationTokens > model.tokenLimit) {
+            break;
+          }
+          tokenCount += tokens.length;
+          messagesToSend = [message, ...messagesToSend];
+        }
+  
+        messagesToSend = [firstMessage, ...messagesToSend]
+      }
+    }
+    return messagesToSend;
+  }
 
 export default handler;
