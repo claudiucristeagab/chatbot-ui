@@ -34,8 +34,16 @@ const handler = async (req: Request): Promise<Response> => {
     let messagesToGoEvaluate: Message[] = [...messages];
     let messagesToSend: Message[] = [];
 
-    // Always include first prompt
-    messagesToSend = includeFirstMessage(model, messagesToGoEvaluate, tokenCount, encoding, MAX_TOKENS);
+    const memoryStyle = process.env.MEMORY_STYLE
+
+    switch(memoryStyle) {
+      case 'includeFirstPrompt':
+        messagesToSend = includeFirstMessageHandling(model, messagesToGoEvaluate, tokenCount, encoding, MAX_TOKENS);
+        break;
+      case 'default':
+      default:
+        messagesToSend = defaultHandling(model, messagesToGoEvaluate, tokenCount, encoding, MAX_TOKENS);
+    }
 
     const stream = await OpenAIStream(model, promptToSend, temperatureToUse, key, messagesToSend);
 
@@ -50,31 +58,49 @@ const handler = async (req: Request): Promise<Response> => {
   }
 };
 
-const includeFirstMessage = (model: OpenAIModel, messagesToGoEvaluate: Message[], tokenCount: number, encoding: GPT3Tokenizer, maxGenerationTokens: number): Message[] => {
-    let messagesToSend: Message[] = [];
-  
-    if (messagesToGoEvaluate.length > 0) {
-      const firstMessage = messagesToGoEvaluate[0];
-      const firstTokens = encoding.encode(firstMessage.content).bpe;
-      
-      if (tokenCount + firstTokens.length + maxGenerationTokens <= model.tokenLimit) {
-        tokenCount += firstTokens.length;
-  
-        for (let i = messagesToGoEvaluate.length - 1; i >= 1; i--) {
-          const message = messagesToGoEvaluate[i];
-          const tokens = encoding.encode(message.content).bpe;
+const includeFirstMessageHandling = (model: OpenAIModel, messagesToGoEvaluate: Message[], tokenCount: number, encoding: GPT3Tokenizer, maxGenerationTokens: number): Message[] => {
+  let messagesToSend: Message[] = [];
+
+  if (messagesToGoEvaluate.length > 0) {
+    const firstMessage = messagesToGoEvaluate[0];
+    const firstTokens = encoding.encode(firstMessage.content).bpe;
     
-          if (tokenCount + tokens.length + maxGenerationTokens > model.tokenLimit) {
-            break;
-          }
-          tokenCount += tokens.length;
-          messagesToSend = [message, ...messagesToSend];
-        }
+    if (tokenCount + firstTokens.length + maxGenerationTokens <= model.tokenLimit) {
+      tokenCount += firstTokens.length;
+
+      for (let i = messagesToGoEvaluate.length - 1; i >= 1; i--) {
+        const message = messagesToGoEvaluate[i];
+        const tokens = encoding.encode(message.content).bpe;
   
-        messagesToSend = [firstMessage, ...messagesToSend]
+        if (tokenCount + tokens.length + maxGenerationTokens > model.tokenLimit) {
+          break;
+        }
+        tokenCount += tokens.length;
+        messagesToSend = [message, ...messagesToSend];
       }
+
+      messagesToSend = [firstMessage, ...messagesToSend]
     }
-    return messagesToSend;
   }
+  console.log(`Tokens: ${tokenCount}/${model.tokenLimit}`)
+  return messagesToSend;
+}
+
+const defaultHandling = (model: OpenAIModel, messagesToGoEvaluate: Message[], tokenCount: number, encoding: GPT3Tokenizer, maxGenerationTokens: number): Message[] => {
+  let messagesToSend: Message[] = [];
+
+  for (let i = messagesToGoEvaluate.length - 1; i >= 0; i--) {
+    const message = messagesToGoEvaluate[i];
+    const tokens = encoding.encode(message.content).bpe;
+
+    if (tokenCount + tokens.length + maxGenerationTokens > model.tokenLimit) {
+      break;
+    }
+    tokenCount += tokens.length;
+    messagesToSend = [message, ...messagesToSend];
+  }
+  console.log(`Tokens: ${tokenCount}/${model.tokenLimit}`)
+  return messagesToSend;
+}
 
 export default handler;
